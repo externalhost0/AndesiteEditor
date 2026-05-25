@@ -133,7 +133,7 @@ namespace Andesite {
 		PushConstantType _runtimePushConstantType = PushConstantType::Float;
 	};
 
-	// accepts float, vec3, or vec4m vec4 gets swizzled to .xyz in resolveUpstreamAs
+	// accepts float, vec3, or vec4, as it gets swizzled to .xyz in resolveUpstreamAs
 	static std::function<bool(ImFlow::Pin*, ImFlow::Pin*)> FloatOrVec3Filter() {
 		return [](const ImFlow::Pin* out, ImFlow::Pin* /*in*/) {
 			return out->getDataType() == typeid(glm::vec3)

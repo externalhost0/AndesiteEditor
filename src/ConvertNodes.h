@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <glm/glm.hpp>
 #include "NodeBasics.h"
-#include "glm/glm.hpp"
 
 namespace Andesite {
 
@@ -202,14 +202,14 @@ namespace Andesite {
 		}
 
 		void emitSource(std::stringstream& stream, GeneratorContext& ctx) override {
-			const std::string uid    = std::to_string(getUID());
+			const std::string uid = std::to_string(getUID());
 			const std::string vecOut = "node" + uid + "_vec";
 
 			const std::string a = inputPinA->isConnected()
 				? ctx.resolveUpstreamAs(inputPinA, "float3")
 				: "float3(0,0,0)";
 
-			// B resolution: SCALE expects a scalar, everything else vec3
+			// special case, SCALE expects a scalar for its B input
 			const bool needsB = !vectorOpIsSingleInput(currentOp);
 			const std::string b = [&]() -> std::string {
 				if (!needsB) return "";

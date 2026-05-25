@@ -116,8 +116,8 @@ namespace Andesite {
 			int idx = (it != outs.end()) ? static_cast<int>(std::distance(outs.begin(), it)) : 0;
 			return resolveOutput(upstreamNode->getUID(), idx);
 		}
-		// like resolveUpstream but promotes float→floatN by wrapping in targetType(x)
-		// float3(x) broadcasts a scalar to all components
+		// like resolveUpstream but promotes float -> floatN by wrapping it in a targetType(x)
+		// ie: float3(x) broadcasts a scalar to all components (xyz)
 		template<typename T>
 		std::string resolveUpstreamAs(std::shared_ptr<ImFlow::InPin<T>> pin, const std::string& targetType) const {
 			auto link = pin->getLink().lock();
@@ -127,10 +127,9 @@ namespace Andesite {
 			const auto& outs = upstreamNode->getOuts();
 			auto it = std::find_if(outs.begin(), outs.end(),
 				[&](const std::shared_ptr<ImFlow::Pin>& p) { return p.get() == leftPin; });
-			int idx = (it != outs.end()) ? static_cast<int>(std::distance(outs.begin(), it)) : 0;
-			const std::string varName = resolveOutput(upstreamNode->getUID(), idx);
-			const auto typeIt = outputTypes.find({upstreamNode->getUID(), idx});
-			if (typeIt != outputTypes.end()) {
+			int idx = it != outs.end() ? static_cast<int>(std::distance(outs.begin(), it)) : 0;
+			std::string varName = resolveOutput(upstreamNode->getUID(), idx);
+			if (const auto typeIt = outputTypes.find({upstreamNode->getUID(), idx}); typeIt != outputTypes.end()) {
 				const std::string& srcType = typeIt->second;
 				if (srcType == "float" && targetType != "float")
 					return targetType + "(" + varName + ")";
