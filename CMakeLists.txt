@@ -14,8 +14,8 @@ include(cmake/CPM.cmake)
 # ---------------- my framework ---------------------
 CPMAddPackage(
         NAME mythril
-        SOURCE_DIR "$ENV{HOME}/Projects/Personal/mythril_library"
-#        URI "gh:externalhost0/Mythril#main"
+#        SOURCE_DIR "$ENV{HOME}/Projects/Personal/mythril_library"
+        URI "gh:externalhost0/Mythril#main"
         OPTIONS
         "MYTH_ENABLE_IMGUI_STANDARD OFF"
         "MYTH_ENABLE_IMGUI_DOCKING ON"
@@ -84,19 +84,12 @@ CPMAddPackage(
 )
 
 #--------------- ImGui SDL3 backend  -----------------
-# Re-declare imgui so ${imgui_SOURCE_DIR} is set in this scope.
-# Tag must match mythril's.
-CPMAddPackage(
-        NAME imgui
-        GITHUB_REPOSITORY "ocornut/imgui"
-        GIT_TAG v1.92.4-docking
-        DOWNLOAD_ONLY True
-)
+# because mythril exposes it we dont have to redownload imgui code
+# and can just directly include whatever source file we want!
 add_library(imgui_sdl3_backend STATIC
-        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+        ${MYTHRIL_IMGUI_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
 )
 target_link_libraries(imgui_sdl3_backend PUBLIC imgui SDL3::SDL3)
-
 
 # -------------------- executable setup --------------------------
 add_executable(${PROJECT_NAME}
