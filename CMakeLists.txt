@@ -14,8 +14,8 @@ include(cmake/CPM.cmake)
 # ---------------- my framework ---------------------
 CPMAddPackage(
         NAME mythril
-#        SOURCE_DIR "$ENV{HOME}/Projects/Personal/mythril_library"
-        URI "gh:externalhost0/Mythril#main"
+        SOURCE_DIR "$ENV{HOME}/Projects/Personal/mythril_library"
+#        URI "gh:externalhost0/Mythril#main"
         OPTIONS
         "MYTH_ENABLE_IMGUI_STANDARD OFF"
         "MYTH_ENABLE_IMGUI_DOCKING ON"

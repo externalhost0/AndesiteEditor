@@ -68,9 +68,9 @@ namespace Andesite {
 		MULTIPLY,
 		DIVIDE,
 
-		kNUM_OPERATIONS
+		kNUM
 	};
-	static const char* operatorToString(Operators op) {
+	static const char* OperatorToString(Operators op) {
 		switch (op) {
 			case Operators::ADD: return "Add";
 			case Operators::SUBTRACT: return "Subtract";
@@ -90,7 +90,7 @@ namespace Andesite {
             addOUT<float>("Out", scalarPinStyle())->behaviour([this] {
                 const float a = getInVal<float>("A");
                 const float b = getInVal<float>("B");
-                switch (currentOperation) {
+                switch (_currentOp) {
                     case Operators::ADD: return a + b;
                     case Operators::SUBTRACT: return a - b;
                     case Operators::MULTIPLY: return a * b;
@@ -124,12 +124,12 @@ namespace Andesite {
         	}
 
             ImGui::SetNextItemWidth(100.f);
-            if (ImGui::BeginCombo("###Options", operatorToString(currentOperation))) {
-                for (int i = 0; i < static_cast<int>(Operators::kNUM_OPERATIONS); i++) {
+            if (ImGui::BeginCombo("###Options", OperatorToString(_currentOp))) {
+                for (int i = 0; i < static_cast<int>(Operators::kNUM); i++) {
                     const auto op = static_cast<Operators>(i);
-                    const bool isSelected = (static_cast<int>(currentOperation) == i);
-                    if (ImGui::Selectable(operatorToString(op), isSelected)) {
-                        currentOperation = op;
+                    const bool isSelected = (static_cast<int>(_currentOp) == i);
+                    if (ImGui::Selectable(OperatorToString(op), isSelected)) {
+                        _currentOp = op;
                     }
                     if (isSelected) ImGui::SetItemDefaultFocus();
                 }
@@ -137,14 +137,14 @@ namespace Andesite {
             }
         }
 		Operators getOp() const {
-	        return currentOperation;
+	        return _currentOp;
         }
     	uint64_t stateHash() const override {
-	        return static_cast<uint64_t>(currentOperation);
+	        return static_cast<uint64_t>(_currentOp);
         }
     private:
     	std::string opSignToString() const {
-    		switch (currentOperation) {
+    		switch (_currentOp) {
     			case Operators::ADD: return "+";
     			case Operators::SUBTRACT: return "-";
     			case Operators::MULTIPLY: return "*";
@@ -156,7 +156,7 @@ namespace Andesite {
 		float valB = 0.f;
     	std::shared_ptr<ImFlow::InPin<float>> inputPinA;
     	std::shared_ptr<ImFlow::InPin<float>> inputPinB;
-        Operators currentOperation = Operators::MULTIPLY;
+        Operators _currentOp = Operators::MULTIPLY;
     };
 
 	enum class VectorOps : uint8_t {
@@ -169,9 +169,10 @@ namespace Andesite {
 		DOT,
 		LENGTH,
 		SCALE,
-		kNUM_OPERATIONS
+
+		kNUM
 	};
-	static const char* vectorOpToString(VectorOps op) {
+	static const char* VectorOpToString(VectorOps op) {
 		switch (op) {
 			case VectorOps::ADD:       return "Add";
 			case VectorOps::SUBTRACT:  return "Subtract";
@@ -182,7 +183,7 @@ namespace Andesite {
 			case VectorOps::DOT:       return "Dot Product";
 			case VectorOps::LENGTH:    return "Length";
 			case VectorOps::SCALE:     return "Scale";
-			default: assert(false);
+			default: assert(false && "Unhandled case in VectorOpToString");
 		}
 	}
 
@@ -202,31 +203,30 @@ namespace Andesite {
 		}
 
 		void emitSource(std::stringstream& stream, GeneratorContext& ctx) override {
-			const std::string uid = std::to_string(getUID());
-			const std::string vecOut = "node" + uid + "_vec";
+			const std::string vecOut = "node" + std::to_string(getUID()) + "_vec";
 
 			const std::string a = inputPinA->isConnected()
 				? ctx.resolveUpstreamAs(inputPinA, "float3")
 				: "float3(0,0,0)";
 
 			// special case, SCALE expects a scalar for its B input
-			const bool needsB = !vectorOpIsSingleInput(currentOp);
+			const bool needsB = !vectorOpIsSingleInput(_currentOp);
 			const std::string b = [&]() -> std::string {
 				if (!needsB) return "";
 				if (!inputPinB->isConnected())
-					return currentOp == VectorOps::SCALE ? "1.0" : "float3(0,0,0)";
-				return currentOp == VectorOps::SCALE
+					return _currentOp == VectorOps::SCALE ? "1.0" : "float3(0,0,0)";
+				return _currentOp == VectorOps::SCALE
 					? ctx.resolveUpstreamAs(inputPinB, "float")
 					: ctx.resolveUpstreamAs(inputPinB, "float3");
 			}();
 
 			// scalar ops broadcast into float3 so the single output is always vec3
-			if (currentOp == VectorOps::DOT) {
+			if (_currentOp == VectorOps::DOT) {
 				stream << "float3 " << vecOut << " = float3(dot(" << a << ", " << b << "));\n";
-			} else if (currentOp == VectorOps::LENGTH) {
+			} else if (_currentOp == VectorOps::LENGTH) {
 				stream << "float3 " << vecOut << " = float3(length(" << a << "));\n";
 			} else {
-				switch (currentOp) {
+				switch (_currentOp) {
 					case VectorOps::ADD:       stream << "float3 " << vecOut << " = " << a << " + " << b << ";\n"; break;
 					case VectorOps::SUBTRACT:  stream << "float3 " << vecOut << " = " << a << " - " << b << ";\n"; break;
 					case VectorOps::MULTIPLY:  stream << "float3 " << vecOut << " = " << a << " * " << b << ";\n"; break;
@@ -241,13 +241,13 @@ namespace Andesite {
 		}
 
 		void draw() override {
-			ImGui::SetNextItemWidth(150.f);
-			if (ImGui::BeginCombo("##VecOp", vectorOpToString(currentOp))) {
-				for (int i = 0; i < static_cast<int>(VectorOps::kNUM_OPERATIONS); i++) {
+			ImGui::SetNextItemWidth(100.f);
+			if (ImGui::BeginCombo("##VecOp", VectorOpToString(_currentOp))) {
+				for (int i = 0; i < static_cast<int>(VectorOps::kNUM); i++) {
 					const auto op = static_cast<VectorOps>(i);
-					const bool selected = currentOp == op;
-					if (ImGui::Selectable(vectorOpToString(op), selected))
-						currentOp = op;
+					const bool selected = _currentOp == op;
+					if (ImGui::Selectable(VectorOpToString(op), selected))
+						_currentOp = op;
 					if (selected) ImGui::SetItemDefaultFocus();
 				}
 				ImGui::EndCombo();
@@ -255,12 +255,98 @@ namespace Andesite {
 		}
 
 		uint64_t stateHash() const override {
-			return static_cast<uint64_t>(currentOp);
+			return static_cast<uint64_t>(_currentOp);
 		}
 
 	private:
+		VectorOps _currentOp = VectorOps::ADD;
 		std::shared_ptr<ImFlow::InPin<glm::vec3>> inputPinA;
 		std::shared_ptr<ImFlow::InPin<glm::vec3>> inputPinB;
-		VectorOps currentOp = VectorOps::ADD;
+	};
+
+	enum class MixOps : uint8_t {
+		Mix,
+		Add,
+		Subtract,
+		Multiply,
+		Screen,
+		Divide,
+		Difference,
+		Darken,
+		Lighten,
+		Overly,
+		ColorDodge,
+		ColorBurn,
+		Hue,
+		Saturation,
+		Value,
+		Color,
+		SoftLight,
+		HardLight,
+
+		kNUM
+	};
+
+	inline const char* MixOpToString(MixOps op) {
+		switch (op) {
+			case MixOps::Mix:         return "Mix";
+			case MixOps::Add:         return "Add";
+			case MixOps::Subtract:    return "Subtract";
+			case MixOps::Multiply:    return "Multiply";
+			case MixOps::Screen:      return "Screen";
+			case MixOps::Divide:      return "Divide";
+			case MixOps::Difference:  return "Difference";
+			case MixOps::Darken:      return "Darken";
+			case MixOps::Lighten:     return "Lighten";
+			case MixOps::Overly:      return "Overly";
+			case MixOps::ColorDodge:  return "ColorDodge";
+			case MixOps::ColorBurn:   return "ColorBurn";
+			case MixOps::Hue:         return "Hue";
+			case MixOps::Saturation:  return "Saturation";
+			case MixOps::Value:       return "Value";
+			case MixOps::Color:       return "Color";
+			case MixOps::SoftLight:   return "SoftLight";
+			case MixOps::HardLight:   return "HardLight";
+			default: assert(false && "Unhandled case in MixOpToString");
+		}
+	}
+
+	struct MixNode : NodeWithCategory<NodeCategory::CONVERT> {
+		explicit MixNode() {
+			setTitle("Mix");
+
+			inputPinA = addIN<glm::vec4>("A", {}, ImFlow::ConnectionFilter::SameType(), colorPinStyle());
+			inputPinB = addIN<glm::vec4>("B", {}, ImFlow::ConnectionFilter::SameType(), colorPinStyle());
+			addOUT<glm::vec4>("Color", colorPinStyle())->behaviour([] {
+				return glm::vec4{};
+			});
+		}
+		void emitSource(std::stringstream& stream, GeneratorContext& ctx) override {
+			const std::string outName = "node" + std::to_string(getUID()) + "_out";
+
+			ctx.registerOutput(getUID(), 0, outName);
+		}
+
+		void draw() override {
+			ImGui::SetNextItemWidth(100.f);
+			if (ImGui::BeginCombo("##VecOp", MixOpToString(_currentOp))) {
+				for (int i = 0; i < static_cast<int>(MixOps::kNUM); i++) {
+					const auto op = static_cast<MixOps>(i);
+					const bool selected = _currentOp == op;
+					if (ImGui::Selectable(MixOpToString(op), selected))
+						_currentOp = op;
+					if (selected) ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+		}
+
+		uint64_t stateHash() const override {
+			return static_cast<uint64_t>(_currentOp);
+		}
+	private:
+		MixOps _currentOp = MixOps::Mix;
+		std::shared_ptr<ImFlow::InPin<glm::vec4>> inputPinA;
+		std::shared_ptr<ImFlow::InPin<glm::vec4>> inputPinB;
 	};
 }

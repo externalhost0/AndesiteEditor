@@ -149,7 +149,7 @@ namespace Andesite {
 	}()
 
 
-    struct OutputData { int f; };
+    struct OutputData { int f = 0; };
 
     struct OutputNode : NodeWithCategory<NodeCategory::SINGLES> {
         explicit OutputNode() {

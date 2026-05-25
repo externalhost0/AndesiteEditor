@@ -411,6 +411,7 @@ namespace Andesite {
 		NodeRegistry::RegisterNode<CombineXYZ>("Combine Node", NodeCategory::CONVERT);
 		NodeRegistry::RegisterNode<PBRNode>("PBR Node", NodeCategory::SHADER);
 		NodeRegistry::RegisterNode<OutputNode>("Output Node", NodeCategory::SINGLES);
+		NodeRegistry::RegisterNode<MixNode>("Mix Node", NodeCategory::CONVERT);
 
 		f.rightClickPopUpContent([&f](ImFlow::BaseNode* node) {
 			if (!node) {

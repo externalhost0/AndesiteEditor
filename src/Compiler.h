@@ -184,7 +184,7 @@ namespace Andesite {
 		}
 		std::string result;
 		for (const auto& entry : entries) {
-			result += std::format("{} {};", PushConstantTypeToShaderString(entry.type), entry.varName);
+			result += std::format("\n\t{} {};", PushConstantTypeToShaderString(entry.type), entry.varName);
 		}
 		return result;
 	}
@@ -214,8 +214,8 @@ namespace Andesite {
 			}
 
 			const std::string members = PushConstantEntriesToString(entries);
-			const std::string userStructDef = "struct UserData {" + members + "}\n";
-			const static std::string pc = "struct PushConstants { float4x4 model; Ptr<Vertex> vertexBufferAddress; Ptr<PerFrameData> frame; DescriptorHandle<SamplerState> linearSampler; DescriptorHandle<SamplerState> nearestSampler; Ptr<UserData> user; }\n";
+			const std::string userStructDef = "struct UserData {" + members + "\n}\n";
+			const static std::string pc = "struct PushConstants { \n\tfloat4x4 model;\n\tPtr<Vertex> vertexBufferAddress;\n\tPtr<PerFrameData> frame;\n\tDescriptorHandle<SamplerState> linearSampler;\n\tDescriptorHandle<SamplerState> nearestSampler;\n\tPtr<UserData> user;\n}\n";
 
 			std::stringstream final;
 
