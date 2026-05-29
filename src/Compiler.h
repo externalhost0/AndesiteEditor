@@ -9,145 +9,74 @@
 #include <fstream>
 #include <iostream>
 
+
 #include "NodeBasics.h"
 #include "Types.h"
+#include "UniqueNodes.h"
 
 namespace Andesite {
 	static constexpr uint32_t kGOLDEN_RATIO = 0x9e3779b9;
 
-	struct PushConstantEntry {
-		std::string varName;
-		PushConstantType type;
-		INode* pNode;
-		size_t offset;
-		size_t size;
-	};
 	struct CompileResult {
 		std::string fileContent;
-		std::vector<PushConstantEntry> pushLayout;
-		size_t pcSize;
+		std::vector<VariableEntry> bufferLayout;
+		size_t bufferSize;
 	};
 
-	struct GraphNode {
-		INode* node = nullptr;
-		std::vector<INode*> nodeInputs;
-		bool active = false;
-
-		bool isDirty() const { return _dirty; }
-		void markDirty() { _dirty = true; }
-		void clearDirty() { _dirty = false; }
-	private:
-		bool _dirty = false;
-	};
-
-	struct PCResult {
-		std::vector<PushConstantEntry> entries;
-		size_t totalsize;
-	};
-
-	struct PCTypeLayout {
+	struct TypeLayout {
 		size_t size;
 		size_t alignment;
 	};
-
-	static PCTypeLayout LayoutFromPCType(PushConstantType type) {
+	static TypeLayout TypeLayoutFromVariableType(VariableType type) {
 		switch (type) {
-			case PushConstantType::Float: return {.size = 4, .alignment = 4};
-			case PushConstantType::Float2: return {.size = 8, .alignment = 4};
-			case PushConstantType::Float3: return {.size = 12, .alignment = 4};
-			case PushConstantType::Float4: return {.size = 16, .alignment = 4};
+			case VariableType::Float:    return {.size = 4, .alignment = 4};
+			case VariableType::Float2:   return {.size = 8, .alignment = 4};
+			case VariableType::Float3:   return {.size = 12, .alignment = 4};
+			case VariableType::Float4:   return {.size = 16, .alignment = 4};
 
-			case PushConstantType::Double:   return {.size = 8,  .alignment = 8};
+			case VariableType::Double:   return {.size = 8,  .alignment = 8};
 
-			case PushConstantType::Int8:     return {.size = 1,  .alignment = 1};
-			case PushConstantType::Int16:    return {.size = 2,  .alignment = 2};
-			case PushConstantType::Int32:    return {.size = 4,  .alignment = 4};
-			case PushConstantType::Int64:    return {.size = 8,  .alignment = 8};
+			case VariableType::Int8:     return {.size = 1,  .alignment = 1};
+			case VariableType::Int16:    return {.size = 2,  .alignment = 2};
+			case VariableType::Int32:    return {.size = 4,  .alignment = 4};
+			case VariableType::Int64:    return {.size = 8,  .alignment = 8};
 
-			case PushConstantType::UInt8:    return {.size = 1,  .alignment = 1};
-			case PushConstantType::UInt16:   return {.size = 2,  .alignment = 2};
-			case PushConstantType::UInt32:   return {.size = 4,  .alignment = 4};
-			case PushConstantType::UInt64:   return {.size = 8,  .alignment = 8};
+			case VariableType::UInt8:    return {.size = 1,  .alignment = 1};
+			case VariableType::UInt16:   return {.size = 2,  .alignment = 2};
+			case VariableType::UInt32:   return {.size = 4,  .alignment = 4};
+			case VariableType::UInt64:   return {.size = 8,  .alignment = 8};
 
-			// https://docs.shader-slang.org/en/latest/external/slang/docs/user-guide/02-conventional-features.html#boolean-type
-			case PushConstantType::Bool:     return {.size = 4,  .alignment = 4};
+				// https://docs.shader-slang.org/en/latest/external/slang/docs/user-guide/02-conventional-features.html#boolean-type
+			case VariableType::Bool:     return {.size = 1,  .alignment = 1};
 
-			case PushConstantType::Texture2D: return {.size = 8, .alignment = 8};
+				// slang places descriptor_handles to uint2 via c layout
+			case VariableType::Texture2D: return {.size = 8, .alignment = 4};
 			default: assert(false && "Unhanded PushConstantType!");
 		}
 	}
+
+	// required for struct packing to match with gpu
 	static size_t AlignUp(size_t value, size_t alignment) {
 		assert(alignment != 0 && "Alignment must be non-zero");
 		return (value + alignment - 1) / alignment * alignment;
 	}
-	static PCResult EvaluateInputs(const std::vector<GraphNode>& topological_nodes) {
-		std::vector<PushConstantEntry> result = {};
-		size_t totalsize = 0;
-		// just move through each node, if it inherits pc behavior than we are going to add it to result
-		for (const auto& graph_node : topological_nodes) {
-			INode* node = graph_node.node;
-			const auto* pc_behavior = dynamic_cast<IPushConstantBehavior*>(node);
-			if (!pc_behavior) continue;
-			const PushConstantType pc_type = pc_behavior->getPCType();
-			const PCTypeLayout layout = LayoutFromPCType(pc_type);
-			const size_t offset = AlignUp(totalsize, layout.alignment);
-			result.push_back({
-				.varName = "val_" + std::to_string(node->getUID()),
-				.type = pc_type,
-				.pNode = node,
-				.offset = offset,
-				.size = layout.size,
-			});
-			totalsize = offset + layout.size;
-		}
-		return { result, totalsize };
+
+	inline void GeneratorContext::addPushConstant(INode* node, VariableType type, const void* src, const std::string& slot) {
+		const auto [size, alignment] = TypeLayoutFromVariableType(type);
+		const size_t offset = AlignUp(pcSize, alignment);
+		pushConstants.push_back({
+			.varName = "val_" + std::to_string(node->getUID()) + slot,
+			.type = type,
+			.offset = offset,
+			.size = size,
+			.src = src,
+		});
+		pcSize = offset + size;
 	}
-
-	struct Graph {
-		static std::vector<GraphNode> Build(OutputNode* output_node) {
-			std::vector<GraphNode> toposort_nodes;
-			std::unordered_set<ImFlow::NodeUID> visited;
-			buildRecursive(output_node, toposort_nodes, visited);
-			return toposort_nodes;
-		}
-	private:
-		size_t _nodeCount = 0;
-
-		static INode* convertToINode(ImFlow::BaseNode* base_node) {
-			const auto node = dynamic_cast<INode*>(base_node);
-			assert(node && "covertToINode() failed: ImFlow::BaseNode* failed to cast into INode*");
-			return node;
-		}
-		static void buildRecursive(ImFlow::BaseNode* basenode, std::vector<GraphNode>& post_order, std::unordered_set<ImFlow::NodeUID>& visited) {
-			if (!basenode) return;
-			const ImFlow::NodeUID nodeUid = basenode->getUID();
-			// base case
-			if (visited.contains(nodeUid)) return;
-
-			visited.insert(nodeUid);
-			GraphNode new_node;
-			new_node.node = dynamic_cast<INode*>(basenode);
-			for (const auto& input_pin : basenode->getIns()) {
-				// obviously we should only care about inputs that have incoming data
-				if (input_pin->isConnected()) {
-					// a link represents the connection between two nodes
-					const auto link = input_pin->getLink().lock();
-					if (!link) continue;
-					// getting the left pin is also the pin from the "left" or the node behind
-					ImFlow::BaseNode* upstream_node = link->left()->getParent();
-					// add this discovered node to the new_nodes inputs
-					new_node.nodeInputs.push_back(dynamic_cast<INode*>(upstream_node));
-					// as we do a dfs, continue from this discovered node
-					buildRecursive(upstream_node, post_order, visited);
-				}
-			}
-			// once the end of a node as been reached, we add it to
-			post_order.push_back(new_node);
-		}
-	};
 
 	struct GraphSignature {
 		static uint64_t Compute(OutputNode* output_node) {
+			// basically perform the dfs we did before but only to test if we need to recompile
 			uint64_t sig = 0;
 			std::unordered_set<ImFlow::NodeUID> visited;
 			hashRecursive(output_node, sig, visited);
@@ -178,33 +107,34 @@ namespace Andesite {
 		}
 	};
 
-	static std::string PushConstantEntriesToString(const std::vector<PushConstantEntry>& entries) {
+	static std::string PushConstantEntriesToString(const std::vector<VariableEntry>& entries) {
 		if (entries.empty()) {
 			std::cerr << "PushConstantEntries has size of 0\n";
 		}
 		std::string result;
 		for (const auto& entry : entries) {
-			result += std::format("\n\t{} {};", PushConstantTypeToShaderString(entry.type), entry.varName);
+			result += std::format("\n\t{} {};", VariableTypeToCodegenString(entry.type), entry.varName);
 		}
 		return result;
 	}
 
 	struct ShaderCompiler {
 		static CompileResult Compile(OutputNode* output_node) {
-			// this is also already culled
-			std::vector<GraphNode> topological_nodes = Graph::Build(output_node);
-
-			const auto [entries, totalsize] = EvaluateInputs(topological_nodes);
-			GeneratorContext generator_context;
-			std::stringstream body;
-			for (const auto& graph_node : topological_nodes) {
-				graph_node.node->emitSource(body, generator_context);
-			}
+			GeneratorContext ctx;
+			GeneratorContext::Scope guard(&ctx);
+			const std::string finalVar = output_node->resolveFinal();
+			if (!finalVar.empty())
+				ctx.body << "output.FragColor = " << finalVar << ";\n";
 
 			// fixme: these paths need to be easily findable in any environment
 			std::ifstream shared_top("../../assets/shaders/SharedTop.txt");
 			if (!shared_top.is_open()) {
 				std::cerr << "Failed to open SharedTop.txt for reading. "<< std::endl;
+				assert(false);
+			}
+			std::ifstream mixfunctions("../../assets/shaders/MixFunctions.txt");
+			if (!mixfunctions.is_open()) {
+				std::cerr << "Failed to open MixFunctions.txt for reading." << std::endl;
 				assert(false);
 			}
 			std::ifstream shared_bottom("../../assets/shaders/SharedBottom.txt");
@@ -213,7 +143,7 @@ namespace Andesite {
 				assert(false);
 			}
 
-			const std::string members = PushConstantEntriesToString(entries);
+			const std::string members = PushConstantEntriesToString(ctx.pushConstants);
 			const std::string userStructDef = "struct UserData {" + members + "\n}\n";
 			const static std::string pc = "struct PushConstants { \n\tfloat4x4 model;\n\tPtr<Vertex> vertexBufferAddress;\n\tPtr<PerFrameData> frame;\n\tDescriptorHandle<SamplerState> linearSampler;\n\tDescriptorHandle<SamplerState> nearestSampler;\n\tPtr<UserData> user;\n}\n";
 
@@ -224,17 +154,19 @@ namespace Andesite {
 			final << userStructDef;
 			final << pc;
 			final << shared_bottom.rdbuf();
+			final << mixfunctions.rdbuf();
 			final << "[shader(\"pixel\")]\n";
 			final << "FSOutput fs_main(v2f input) {\n";
 			final << "FSOutput output;\n";
-			final << body.str();
+			final << ctx.body.str();
 			final << "return output;\n";
 			final << "}\n";
 
 			shared_top.close();
+			mixfunctions.close();
 			shared_bottom.close();
 
-			return { final.str(), entries, totalsize };
+			return { final.str(), ctx.pushConstants, ctx.pcSize };
 		}
 	};
 }

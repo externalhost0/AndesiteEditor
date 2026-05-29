@@ -6,9 +6,10 @@
 
 #include "NodeBasics.h"
 
+// generally nodes that have no inputs themselves
 namespace Andesite {
 
-    struct ScalarNode : NodeWithCategory<NodeCategory::INPUT>, NodeWithDynamicPushConstant {
+    struct ScalarNode : NodeWithCategory<NodeCategory::INPUT>, NodeWithDynamicVariable {
 		using ScalarValue = std::variant<
 			int8_t,
 			int16_t,
@@ -31,15 +32,16 @@ namespace Andesite {
 		uint64_t stateHash() const override {
 			return static_cast<uint64_t>(_currentType);
 		}
-        explicit ScalarNode() {
-            setTitle("Scalar");
+        explicit ScalarNode() : NodeWithCategory("Scalar") {
 			updateTypeConfiguration();
-        }
-    	void emitSource(std::stringstream& stream, GeneratorContext& ctx) override {
-        	const std::string outVar = "val" + std::to_string(this->getUID()) + "_out";
-			const char* shaderTypeStr = PushConstantTypeToShaderString(_runtimePushConstantType);
-        	stream << shaderTypeStr << " " << outVar << " = push.user.val_" << std::to_string(this->getUID()) << ";\n";
-        	ctx.registerOutput(getUID(), 0, outVar, shaderTypeStr);
+			addCodeOUT("Value", ConnectionType::Float)->behaviour([this] {
+				auto& ctx = *GeneratorContext::active;
+				const std::string outVar = "val" + std::to_string(getUID()) + "_out";
+				const char* shaderTypeStr = VariableTypeToCodegenString(_runtimePushConstantType);
+				ctx.body << shaderTypeStr << " " << outVar << " = push.user.val_" << std::to_string(getUID()) << ";\n";
+				ctx.addPushConstant(this, geVariableType(), getRawDataPtr());
+				return outVar;
+			});
         }
         void draw() override {
         	ImGui::SetNextItemWidth(150.f);
@@ -103,14 +105,14 @@ namespace Andesite {
 
 		void changeVariantStoredValue(ScalarType type) {
 			switch (type) {
-				case ScalarType::Int8:   _value = int8_t(0); break;
-				case ScalarType::Int16:  _value = int16_t(0); break;
-				case ScalarType::Int32:  _value = int32_t(0); break;
-				case ScalarType::Int64:  _value = int64_t(0); break;
-				case ScalarType::UInt8:  _value = uint8_t(0); break;
-				case ScalarType::UInt16: _value = uint16_t(0); break;
-				case ScalarType::UInt32: _value = uint32_t(0); break;
-				case ScalarType::UInt64: _value = uint64_t(0); break;
+				case ScalarType::Int8:   _value = static_cast<int8_t>(0); break;
+				case ScalarType::Int16:  _value = static_cast<int16_t>(0); break;
+				case ScalarType::Int32:  _value = static_cast<int32_t>(0); break;
+				case ScalarType::Int64:  _value = static_cast<int64_t>(0); break;
+				case ScalarType::UInt8:  _value = static_cast<uint8_t>(0); break;
+				case ScalarType::UInt16: _value = static_cast<uint16_t>(0); break;
+				case ScalarType::UInt32: _value = static_cast<uint32_t>(0); break;
+				case ScalarType::UInt64: _value = static_cast<uint64_t>(0); break;
 				case ScalarType::Float:  _value = 0.0f; break;
 				case ScalarType::Double: _value = 0.0; break;
 				case ScalarType::Bool:   _value = false; break;
@@ -119,24 +121,18 @@ namespace Andesite {
 			updateTypeConfiguration();
 		}
 		void updateTypeConfiguration() {
-			dropOUT(_lastPinUID);
-			std::visit([this](auto&& arg) {
-				using T = std::decay_t<decltype(arg)>;
-				_lastPinUID = addOUT<T>("Value", scalarPinStyle())->getUid();
-			}, _value);
-
 			switch (_currentType) {
-				case ScalarType::Int8:   _runtimePushConstantType = PushConstantType::Int8; break;
-				case ScalarType::Int16:  _runtimePushConstantType = PushConstantType::Int16; break;
-				case ScalarType::Int32:  _runtimePushConstantType = PushConstantType::Int32; break;
-				case ScalarType::Int64:  _runtimePushConstantType = PushConstantType::Int64; break;
-				case ScalarType::UInt8:  _runtimePushConstantType = PushConstantType::UInt8; break;
-				case ScalarType::UInt16: _runtimePushConstantType = PushConstantType::UInt16; break;
-				case ScalarType::UInt32: _runtimePushConstantType = PushConstantType::UInt32; break;
-				case ScalarType::UInt64: _runtimePushConstantType = PushConstantType::UInt64; break;
-				case ScalarType::Float:  _runtimePushConstantType = PushConstantType::Float; break;
-				case ScalarType::Double: _runtimePushConstantType = PushConstantType::Double; break;
-				case ScalarType::Bool:   _runtimePushConstantType = PushConstantType::Bool; break;
+				case ScalarType::Int8:   _runtimePushConstantType = VariableType::Int8; break;
+				case ScalarType::Int16:  _runtimePushConstantType = VariableType::Int16; break;
+				case ScalarType::Int32:  _runtimePushConstantType = VariableType::Int32; break;
+				case ScalarType::Int64:  _runtimePushConstantType = VariableType::Int64; break;
+				case ScalarType::UInt8:  _runtimePushConstantType = VariableType::UInt8; break;
+				case ScalarType::UInt16: _runtimePushConstantType = VariableType::UInt16; break;
+				case ScalarType::UInt32: _runtimePushConstantType = VariableType::UInt32; break;
+				case ScalarType::UInt64: _runtimePushConstantType = VariableType::UInt64; break;
+				case ScalarType::Float:  _runtimePushConstantType = VariableType::Float; break;
+				case ScalarType::Double: _runtimePushConstantType = VariableType::Double; break;
+				case ScalarType::Bool:   _runtimePushConstantType = VariableType::Bool; break;
 					default: assert(false && "Unhanled ScalarType");
 			}
 		}
@@ -156,24 +152,20 @@ namespace Andesite {
 			}
 		}
 
-		ImFlow::PinUID _lastPinUID;
 		bool _advancedOn = false;
 		ScalarType _currentType = ScalarType::Float;
 		ScalarValue _value = 0.0f;
     };
 
-    struct RGBNode : NodeWithCategory<NodeCategory::INPUT>, NodeWithPushConstant<glm::vec3> {
-        explicit RGBNode() {
-            setTitle("RGB");
-
-            addOUT<glm::vec3>("Color", colorPinStyle())->behaviour([this] {
-                return color;
+    struct RGBNode : NodeWithCategory<NodeCategory::INPUT>, NodeWithStaticVariable<glm::vec3> {
+        explicit RGBNode() : NodeWithCategory("RGB") {
+            addCodeOUT("Color", ConnectionType::Float3)->behaviour([this] {
+                auto& ctx = *GeneratorContext::active;
+                const std::string outVar = "val" + std::to_string(getUID()) + "_out";
+                ctx.body << "float3 " << outVar << " = push.user.val_" << std::to_string(getUID()) << ";\n";
+                ctx.addPushConstant(this, geVariableType(), &color);
+                return outVar;
             });
-        }
-    	void emitSource(std::stringstream& stream, GeneratorContext& ctx) override {
-        	const std::string outVar = "val" + std::to_string(this->getUID()) + "_out";
-	        stream << "float3 " << outVar << " = push.user.val_" << std::to_string(this->getUID()) << ";\n";
-        	ctx.registerOutput(getUID(), 0, outVar, "float3");
         }
 
         void draw() override {
@@ -191,4 +183,15 @@ namespace Andesite {
     private:
         glm::vec3 color = {1, 0, 0};
     };
+
+	struct TextureCoordinateNode : NodeWithCategory<NodeCategory::INPUT> {
+		explicit TextureCoordinateNode() : NodeWithCategory("Texture Coordinate") {
+			addCodeOUT("Generated", ConnectionType::Float2)->behaviour([this] {
+				auto& ctx = *GeneratorContext::active;
+				const std::string outVar = "val" + std::to_string(getUID()) + "_out";
+				ctx.body << "float2 " << outVar << " = input.UV;\n";
+				return outVar;
+			});
+		}
+	};
 }

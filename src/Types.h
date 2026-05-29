@@ -5,9 +5,12 @@
 #pragma once
 
 #include <algorithm>
-#include <map>
+#include <functional>
 #include <string>
-#include <memory>
+#include <sstream>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <ImNodeFlow.h>
 
@@ -21,9 +24,12 @@ namespace Andesite {
 		UInt16,
 		UInt32,
 		UInt64,
+
 		Float,
 		Double,
+
 		Bool,
+
 		kNUM
 	};
 
@@ -47,7 +53,7 @@ namespace Andesite {
 		}
 	}
 
-	enum class PushConstantType {
+	enum class VariableType {
 		Double,
 		Bool,
 
@@ -68,76 +74,207 @@ namespace Andesite {
 		// ie any texture or sampler, anything by handle
 		Texture2D
 	};
-	static const char* PushConstantTypeToShaderString(PushConstantType type) {
+
+	// how we describe the input in the struct 'UserData'
+	static const char* VariableTypeToCodegenString(VariableType type) {
 		switch (type) {
-			case PushConstantType::Float: return "float";
-			case PushConstantType::Float2: return "float2";
-			case PushConstantType::Float3: return "float3";
-			case PushConstantType::Float4: return "float4";
-			case PushConstantType::Int8:   return "int8_t";
-			case PushConstantType::Int16:  return "int16_t";
-			case PushConstantType::Int32:  return "int";
-			case PushConstantType::Int64:  return "int64_t";
-			case PushConstantType::UInt8:  return "uint8_t";
-			case PushConstantType::UInt16: return "uint16_t";
-			case PushConstantType::UInt32: return "uint";
-			case PushConstantType::UInt64: return "uint64_t";
-			case PushConstantType::Double: return "double";
-			case PushConstantType::Bool:   return "bool";
-			case PushConstantType::Texture2D: return "DescriptorHandle<Texture2D>";
+			case VariableType::Float: return "float";
+			case VariableType::Float2: return "float2";
+			case VariableType::Float3: return "float3";
+			case VariableType::Float4: return "float4";
+			case VariableType::Int8:   return "int8_t";
+			case VariableType::Int16:  return "int16_t";
+			case VariableType::Int32:  return "int";
+			case VariableType::Int64:  return "int64_t";
+			case VariableType::UInt8:  return "uint8_t";
+			case VariableType::UInt16: return "uint16_t";
+			case VariableType::UInt32: return "uint";
+			case VariableType::UInt64: return "uint64_t";
+			case VariableType::Double: return "double";
+			case VariableType::Bool:   return "bool";
+			case VariableType::Texture2D: return "DescriptorHandle<Texture2D>";
 			default: assert(false && "Unhanded case in StringFromPCType");
 		}
 	}
 
+	// forward declare this guy
+	struct INode;
+	// how we represent every input + textures
+	struct VariableEntry {
+		std::string varName;
+		VariableType type;
+		size_t offset;
+		size_t size;
+		// points at the node-owned value; bytes are copied into the user buffer at upload time
+		const void* src;
+	};
 
+
+	enum class ConnectionType : uint8_t {
+		Float,
+		Float2,
+		Float3,
+		Float4,
+		Adaptive,
+	};
+
+	// how we describe the connection in the body
+	inline const char* ConnectionTypeToString(ConnectionType t) {
+		switch (t) {
+			case ConnectionType::Float: return "float";
+			case ConnectionType::Float2:  return "float2";
+			case ConnectionType::Float3:  return "float3";
+			case ConnectionType::Float4:  return "float4";
+			case ConnectionType::Adaptive:
+				assert(false && "Adaptive is not a concrete shader type");
+			default:
+				assert(false && "Unhandled case in ShaderTypeToString");
+		}
+	}
+
+	inline bool IsConcreteConnection(ConnectionType t) {
+		return t != ConnectionType::Adaptive;
+	}
+
+	inline bool IsVectorConnection(ConnectionType t) {
+		return t == ConnectionType::Float2 || t == ConnectionType::Float3 || t == ConnectionType::Float4;
+	}
+
+	inline uint8_t ConnectionComponentCount(ConnectionType t) {
+		switch (t) {
+			case ConnectionType::Float: return 1;
+			case ConnectionType::Float2: return 2;
+			case ConnectionType::Float3: return 3;
+			case ConnectionType::Float4: return 4;
+			case ConnectionType::Adaptive: return 4;
+			default: assert(false && "Unhandled case in ConnectionComponentCount");
+		}
+	}
+
+	// horribly architecture to get to this point but ill stick with it for a little bit
+	inline ConnectionType VariableTypeToConnectionTypeEXT(VariableType type) {
+		switch (type) {
+			case VariableType::Float: return ConnectionType::Float;
+			case VariableType::Float2: return ConnectionType::Float2;
+			case VariableType::Float3: return ConnectionType::Float3;
+			case VariableType::Float4: return ConnectionType::Float4;
+			default: assert(false && "Unhandled case in VariableTypeToConnectionTypeEXT!");
+		}
+	}
+	inline VariableType ConnectionTypeToVariableTypeEXT(ConnectionType type) {
+		switch (type) {
+			case ConnectionType::Float: return VariableType::Float;
+			case ConnectionType::Float2: return VariableType::Float2;
+			case ConnectionType::Float3: return VariableType::Float3;
+			case ConnectionType::Float4: return VariableType::Float4;
+			case ConnectionType::Adaptive: assert(false && "Adaptive cannot be converted to a variable type");
+			default: assert(false && "Unhandled case in ConnectionTypeToVariableTypeEXT!");
+		}
+	}
+
+	inline std::unordered_map<const ImFlow::Pin*, ConnectionType>& pinTypeRegistry() {
+		static std::unordered_map<const ImFlow::Pin*, ConnectionType> reg;
+		return reg;
+	}
+	inline std::unordered_map<const ImFlow::Pin*, std::vector<ConnectionType>>& pinConcreteOptionsRegistry() {
+		static std::unordered_map<const ImFlow::Pin*, std::vector<ConnectionType>> reg;
+		return reg;
+	}
+	inline void setPinType(const ImFlow::Pin* pin, ConnectionType t) { pinTypeRegistry()[pin] = t; }
+	inline void setPinConcreteOptions(const ImFlow::Pin* pin, std::vector<ConnectionType> options) {
+		pinConcreteOptionsRegistry()[pin] = std::move(options);
+	}
+	inline void clearPinMetadata(const ImFlow::Pin* pin) {
+		pinTypeRegistry().erase(pin);
+		pinConcreteOptionsRegistry().erase(pin);
+	}
+	inline ConnectionType pinType(const ImFlow::Pin* pin) {
+		const auto it = pinTypeRegistry().find(pin);
+		return it != pinTypeRegistry().end() ? it->second : ConnectionType::Float;
+	}
+	inline bool pinAllowsConcreteType(const ImFlow::Pin* pin, ConnectionType type) {
+		const auto it = pinConcreteOptionsRegistry().find(pin);
+		if (it == pinConcreteOptionsRegistry().end() || it->second.empty()) return true;
+		return std::ranges::find(it->second, type) != it->second.end();
+	}
+
+	// defines allowed behavior from two types
+	inline bool CanConvertConnection(ConnectionType from, ConnectionType to) {
+		if (from == ConnectionType::Adaptive || to == ConnectionType::Adaptive) return true;
+		if (from == to) return true;
+		// a scalar type to its associated vector represetnation is always supported
+		if (from == ConnectionType::Float && to == ConnectionType::Float2) return true;
+		if (from == ConnectionType::Float && to == ConnectionType::Float3) return true;
+		if (from == ConnectionType::Float && to == ConnectionType::Float4) return true;
+		return false;
+	}
+
+	inline std::string ConvertConnectionExpression(std::string expr, ConnectionType from, ConnectionType to) {
+		if (from == ConnectionType::Adaptive) {
+			return expr;
+		}
+		if (to == ConnectionType::Adaptive) {
+			assert(false && "Adaptive cannot be used as a codegen target type");
+		}
+		if (from == to) return expr;
+		assert(CanConvertConnection(from, to) && "Unsupported connection conversion");
+
+		if (from == ConnectionType::Float && to != ConnectionType::Float)
+			return std::string(ConnectionTypeToString(to)) + "(" + expr + ")";
+
+		return expr;
+	}
+
+	inline bool CanConnectPins(const ImFlow::Pin* out, const ImFlow::Pin* in) {
+		const ConnectionType from = pinType(out);
+		const ConnectionType to = pinType(in);
+
+		if (from == ConnectionType::Adaptive && to == ConnectionType::Adaptive) {
+			const auto outIt = pinConcreteOptionsRegistry().find(out);
+			const auto inIt = pinConcreteOptionsRegistry().find(in);
+			if (outIt == pinConcreteOptionsRegistry().end() || outIt->second.empty()) return true;
+			if (inIt == pinConcreteOptionsRegistry().end() || inIt->second.empty()) return true;
+			return std::ranges::any_of(outIt->second, [&](ConnectionType type) {
+				return std::ranges::find(inIt->second, type) != inIt->second.end();
+			});
+		}
+		if (from == ConnectionType::Adaptive)
+			return IsConcreteConnection(to) && pinAllowsConcreteType(out, to);
+		if (to == ConnectionType::Adaptive)
+			return IsConcreteConnection(from) && pinAllowsConcreteType(in, from);
+		return CanConvertConnection(from, to);
+	}
+
+	// filters similar to provided ones, but for our use case
+	// you shouldnt need to call either of these yourself
+	inline std::function<bool(ImFlow::Pin*, ImFlow::Pin*)> CodeFilterCompatible() {
+		return [](const ImFlow::Pin* out, const ImFlow::Pin* in) {
+			return CanConnectPins(out, in);
+		};
+	}
+	inline std::function<bool(ImFlow::Pin*, ImFlow::Pin*)> CodeFilterExact() {
+		return [](const ImFlow::Pin* out, const ImFlow::Pin* in) {
+			return pinType(out) == pinType(in);
+		};
+	}
+
+	// shared state during generation
 	struct GeneratorContext {
-		std::map<std::pair<ImFlow::NodeUID, int>, std::string> outputVarnames;
-		std::map<std::pair<ImFlow::NodeUID, int>, std::string> outputTypes;
+		std::stringstream body;
+		std::vector<VariableEntry> pushConstants;
+		size_t pcSize = 0;
 
-		void registerOutput(ImFlow::NodeUID uid, int pinIdx, const std::string& varName, const std::string& type = "") {
-			outputVarnames[{uid, pinIdx}] = varName;
-			if (!type.empty()) outputTypes[{uid, pinIdx}] = type;
-		}
-		std::string resolveOutput(ImFlow::NodeUID uid, int pinIdx) const {
-			const auto it = outputVarnames.find({uid, pinIdx});
-			assert(it != outputVarnames.end() && "Output Var not found, your topological order is broken!");
-			return it->second;
-		}
-		// gets whatever node is feeding into the inputPin
-		template<typename T>
-		std::string resolveUpstream(std::shared_ptr<ImFlow::InPin<T>> pin) const {
-			auto link = pin->getLink().lock();
-			assert(link && "resolveUpstream called on unconnected pin");
-			ImFlow::Pin* leftPin = link->left();
-			ImFlow::BaseNode* upstreamNode = leftPin->getParent();
-			const auto& outs = upstreamNode->getOuts();
-			auto it = std::find_if(outs.begin(), outs.end(),
-				[&](const std::shared_ptr<ImFlow::Pin>& p) { return p.get() == leftPin; });
-			int idx = (it != outs.end()) ? static_cast<int>(std::distance(outs.begin(), it)) : 0;
-			return resolveOutput(upstreamNode->getUID(), idx);
-		}
-		// like resolveUpstream but promotes float -> floatN by wrapping it in a targetType(x)
-		// ie: float3(x) broadcasts a scalar to all components (xyz)
-		template<typename T>
-		std::string resolveUpstreamAs(std::shared_ptr<ImFlow::InPin<T>> pin, const std::string& targetType) const {
-			auto link = pin->getLink().lock();
-			assert(link && "resolveUpstreamAs called on unconnected pin");
-			ImFlow::Pin* leftPin = link->left();
-			ImFlow::BaseNode* upstreamNode = leftPin->getParent();
-			const auto& outs = upstreamNode->getOuts();
-			auto it = std::find_if(outs.begin(), outs.end(),
-				[&](const std::shared_ptr<ImFlow::Pin>& p) { return p.get() == leftPin; });
-			int idx = it != outs.end() ? static_cast<int>(std::distance(outs.begin(), it)) : 0;
-			std::string varName = resolveOutput(upstreamNode->getUID(), idx);
-			if (const auto typeIt = outputTypes.find({upstreamNode->getUID(), idx}); typeIt != outputTypes.end()) {
-				const std::string& srcType = typeIt->second;
-				if (srcType == "float" && targetType != "float")
-					return targetType + "(" + varName + ")";
-				if (srcType == "float4" && targetType == "float3")
-					return varName + ".xyz";
-			}
-			return varName;
-		}
+		inline static GeneratorContext* active = nullptr;
+
+		struct Scope {
+			explicit Scope(GeneratorContext* ctx) { active = ctx; }
+			~Scope() { active = nullptr; }
+			Scope(const Scope&) = delete;
+			Scope& operator=(const Scope&) = delete;
+		};
+
+		// src points at the value owned by the node instance to upload each frame
+		void addPushConstant(INode* node, VariableType type, const void* src, const std::string& slot = {});
 	};
 
 }

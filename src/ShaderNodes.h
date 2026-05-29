@@ -11,31 +11,24 @@
 namespace Andesite {
 
     struct PBRNode : NodeWithCategory<NodeCategory::SHADER> {
-        explicit PBRNode() {
-            setTitle("PBR Shader");
+        explicit PBRNode() : NodeWithCategory("PBR Shader") {
+            inputPinAlbedo = addCodeIN("Albedo", ConnectionType::Float3, "float3(1,0,0)");
+            inputPinMetallic = addCodeIN("Metallic", ConnectionType::Float, "0.0");
+            inputPinRoughness = addCodeIN("Roughness", ConnectionType::Float, "0.5");
 
-            inputPinAlbedo = addIN<glm::vec3>("Albedo", {}, FloatOrVec3Filter(), colorPinStyle());
-            inputPinMetallic = addIN<float>("Metallic", 0.f, ImFlow::ConnectionFilter::SameType(), scalarPinStyle());
-            inputPinRoughness = addIN<float>("Roughness", 0.f, ImFlow::ConnectionFilter::SameType(), scalarPinStyle());
-
-            addOUT<OutputData>("Output", shaderPinStyle())->behaviour([this] {
-                return data;
+            addCodeOUT("Output", ConnectionType::Float4)->behaviour([this] {
+                auto& ctx = *GeneratorContext::active;
+                const std::string outVar = "node" + std::to_string(getUID()) + "_out";
+                const std::string albedo = pullAs("Albedo", ConnectionType::Float3);
+                const std::string metallic = pull("Metallic");
+                const std::string rough = pull("Roughness");
+                ctx.body << "float4 " << outVar << " = PBR(" << albedo << ", " << metallic << ", " << rough << ");\n";
+                return outVar;
             });
         }
-
-		void emitSource(std::stringstream& stream, GeneratorContext& ctx) override {
-	        const std::string outVar = "node" + std::to_string(getUID()) + "_out";
-        	const std::string albedo = inputPinAlbedo->isConnected()  ? ctx.resolveUpstreamAs(inputPinAlbedo, "float3")   : "float3(1,0,0)";
-        	const std::string metallic = inputPinMetallic->isConnected()  ? ctx.resolveUpstream(inputPinMetallic) : "0.0";
-        	const std::string rough = inputPinRoughness->isConnected() ? ctx.resolveUpstream(inputPinRoughness) : "0.5";
-
-        	stream << "float4 " << outVar << " = PBR(" << albedo << ", " << metallic << ", " << rough << ");\n";
-        	ctx.registerOutput(getUID(), 0, outVar, "float4");
-        }
     private:
-    	std::shared_ptr<ImFlow::InPin<glm::vec3>> inputPinAlbedo;
-    	std::shared_ptr<ImFlow::InPin<float>> inputPinMetallic;
-    	std::shared_ptr<ImFlow::InPin<float>> inputPinRoughness;
-        OutputData data;
+    	InputPin inputPinAlbedo;
+    	InputPin inputPinMetallic;
+    	InputPin inputPinRoughness;
     };
 }

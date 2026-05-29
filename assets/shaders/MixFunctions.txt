@@ -1,0 +1,191 @@
+// --- HELPER DECLARATIONS FOR HSL MODES ---
+float3 rgb_to_hsv(float3 c);
+float3 hsv_to_rgb(float3 c);
+
+// ==========================================
+// STANDARD BLENDING FUNCTIONS
+// ==========================================
+
+// Lerp / Mix
+float3 mix_lerp(float3 base, float3 blend, float factor)
+{
+    return lerp(base, blend, factor);
+}
+
+// Add
+float3 mix_add(float3 base, float3 blend, float factor)
+{
+    float3 result = saturate(base + blend);
+    return lerp(base, result, factor);
+}
+
+// Subtract
+float3 mix_subtract(float3 base, float3 blend, float factor)
+{
+    float3 result = saturate(base - blend);
+    return lerp(base, result, factor);
+}
+
+// Multiply
+float3 mix_multiply(float3 base, float3 blend, float factor)
+{
+    float3 result = base * blend;
+    return lerp(base, result, factor);
+}
+
+// Screen
+float3 mix_screen(float3 base, float3 blend, float factor)
+{
+    float3 result = 1.0 - (1.0 - base) * (1.0 - blend);
+    return lerp(base, result, factor);
+}
+
+// Divide
+float3 mix_divide(float3 base, float3 blend, float factor)
+{
+    float3 result = base / max(blend, float3(0.00001));
+    result = saturate(result);
+    return lerp(base, result, factor);
+}
+
+// Difference
+float3 mix_difference(float3 base, float3 blend, float factor)
+{
+    float3 result = abs(base - blend);
+    return lerp(base, result, factor);
+}
+
+// Darken
+float3 mix_darken(float3 base, float3 blend, float factor)
+{
+    float3 result = min(base, blend);
+    return lerp(base, result, factor);
+}
+
+// Lighten
+float3 mix_lighten(float3 base, float3 blend, float factor)
+{
+    float3 result = max(base, blend);
+    return lerp(base, result, factor);
+}
+
+// Overly / Overlay
+float3 mix_overly(float3 base, float3 blend, float factor)
+{
+    float3 result = float3(
+        base.r < 0.5 ? 2.0 * base.r * blend.r : 1.0 - 2.0 * (1.0 - base.r) * (1.0 - blend.r),
+        base.g < 0.5 ? 2.0 * base.g * blend.g : 1.0 - 2.0 * (1.0 - base.g) * (1.0 - blend.g),
+        base.b < 0.5 ? 2.0 * base.b * blend.b : 1.0 - 2.0 * (1.0 - base.b) * (1.0 - blend.b)
+    );
+    return lerp(base, result, factor);
+}
+
+// Color Dodge
+float3 mix_colordodge(float3 base, float3 blend, float factor)
+{
+    float3 result = base / max(1.0 - blend, float3(0.00001));
+    result = saturate(result);
+    return lerp(base, result, factor);
+}
+
+// Color Burn
+float3 mix_colorburn(float3 base, float3 blend, float factor)
+{
+    float3 result = 1.0 - (1.0 - base) / max(blend, float3(0.00001));
+    result = saturate(result);
+    return lerp(base, result, factor);
+}
+
+// Soft Light
+float3 mix_softlight(float3 base, float3 blend, float factor)
+{
+    float3 result = float3(
+        blend.r < 0.5 ? base.r + (2.0 * blend.r - 1.0) * (base.r - base.r * base.r) : base.r + (2.0 * blend.r - 1.0) * (sqrt(base.r) - base.r),
+        blend.g < 0.5 ? base.g + (2.0 * blend.g - 1.0) * (base.g - base.g * base.g) : base.g + (2.0 * blend.g - 1.0) * (sqrt(base.g) - base.g),
+        blend.b < 0.5 ? base.b + (2.0 * blend.b - 1.0) * (base.b - base.b * base.b) : base.b + (2.0 * blend.b - 1.0) * (sqrt(base.b) - base.b)
+    );
+    return lerp(base, result, factor);
+}
+
+// Hard Light
+float3 mix_hardlight(float3 base, float3 blend, float factor)
+{
+    float3 result = float3(
+        blend.r < 0.5 ? 2.0 * base.r * blend.r : 1.0 - 2.0 * (1.0 - base.r) * (1.0 - blend.r),
+        blend.g < 0.5 ? 2.0 * base.g * blend.g : 1.0 - 2.0 * (1.0 - base.g) * (1.0 - blend.g),
+        blend.b < 0.5 ? 2.0 * base.b * blend.b : 1.0 - 2.0 * (1.0 - base.b) * (1.0 - blend.b)
+    );
+    return lerp(base, result, factor);
+}
+
+
+// ==========================================
+// COLOR SPACE ADVANCED BLEND MODES (HSV)
+// ==========================================
+
+// Hue
+float3 mix_hue(float3 base, float3 blend, float factor)
+{
+    float3 baseHSV = rgb_to_hsv(base);
+    float3 blendHSV = rgb_to_hsv(blend);
+
+    float3 resultHSV = float3(blendHSV.x, baseHSV.y, baseHSV.z);
+    float3 result = hsv_to_rgb(resultHSV);
+    return lerp(base, result, factor);
+}
+
+// Saturation
+float3 mix_saturation(float3 base, float3 blend, float factor)
+{
+    float3 baseHSV = rgb_to_hsv(base);
+    float3 blendHSV = rgb_to_hsv(blend);
+
+    float3 resultHSV = float3(baseHSV.x, blendHSV.y, baseHSV.z);
+    float3 result = hsv_to_rgb(resultHSV);
+    return lerp(base, result, factor);
+}
+
+// Value
+float3 mix_value(float3 base, float3 blend, float factor)
+{
+    float3 baseHSV = rgb_to_hsv(base);
+    float3 blendHSV = rgb_to_hsv(blend);
+
+    float3 resultHSV = float3(baseHSV.x, baseHSV.y, blendHSV.z);
+    float3 result = hsv_to_rgb(resultHSV);
+    return lerp(base, result, factor);
+}
+
+// Color
+float3 mix_color(float3 base, float3 blend, float factor)
+{
+    float3 baseHSV = rgb_to_hsv(base);
+    float3 blendHSV = rgb_to_hsv(blend);
+
+    float3 resultHSV = float3(blendHSV.x, blendHSV.y, baseHSV.z);
+    float3 result = hsv_to_rgb(resultHSV);
+    return lerp(base, result, factor);
+}
+
+
+// ==========================================
+// COLOR CONVERSION HELPERS
+// ==========================================
+
+float3 rgb_to_hsv(float3 c)
+{
+    float4 K = float4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    float4 p = lerp(float4(c.bg, K.wz), float4(c.gb, K.xy), step(c.b, c.g));
+    float4 q = lerp(float4(p.xyw, c.r), float4(c.r, p.yzx), step(p.x, c.r));
+
+    float d = q.x - min(q.w, q.y);
+    float e = 1.0e-10;
+    return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+float3 hsv_to_rgb(float3 c)
+{
+    float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
+}

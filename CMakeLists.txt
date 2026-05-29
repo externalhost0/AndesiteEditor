@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 set(PROJECT_NAME "AndesiteEditor")
 project(${PROJECT_NAME}
         VERSION 0.1
-        LANGUAGES C CXX OBJC
+        LANGUAGES C CXX OBJC OBJCXX
 )
 
 set(CMAKE_CXX_STANDARD 23)
@@ -25,8 +25,9 @@ CPMAddPackage(
 #-------------- ImNodeFlow -------------------
 CPMAddPackage(
         NAME ImNodeFlow
-        GITHUB_REPOSITORY "Fattorino/ImNodeFlow"
-        GIT_TAG "master"
+        SOURCE_DIR "$ENV{HOME}/Projects/Personal/ImNodeFlow"
+#        GITHUB_REPOSITORY "externalhost0/ImNodeFlow"
+#        GIT_TAG "master"
 )
 if(ImNodeFlow_ADDED)
     add_library(ImNodeFlow STATIC
@@ -106,3 +107,10 @@ target_link_libraries(${PROJECT_NAME}
         nfd
 )
 target_compile_definitions(${PROJECT_NAME} PRIVATE IMGUI_DEFINE_MATH_OPERATORS)
+
+if(APPLE)
+    target_sources(${PROJECT_NAME} PRIVATE src/MacOSGestures.mm)
+    set_source_files_properties(src/MacOSGestures.mm PROPERTIES
+        COMPILE_FLAGS "-fobjc-arc")
+    target_link_libraries(${PROJECT_NAME} PRIVATE "-framework Cocoa")
+endif()

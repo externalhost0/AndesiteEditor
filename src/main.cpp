@@ -6,6 +6,7 @@
 #include <mythril/RenderGraphBuilder.h>
 
 #include <chrono>
+#include <cctype>
 #include <fstream>
 #include <functional>
 
@@ -22,11 +23,17 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
+#ifdef __APPLE__
+#include "MacOSGestures.h"
+#endif
+
 #include "Compiler.h"
 #include "NodeBasics.h"
 #include "ShaderNodes.h"
 #include "ConvertNodes.h"
 #include "InputNodes.h"
+#include "TextureNodes.h"
+#include "UniqueNodes.h"
 
 namespace Andesite {
 	namespace GPU {
@@ -293,7 +300,7 @@ namespace Andesite {
 			.size = sizeof(defaultColor),
 			.usage = mythril::BufferUsageBits::BufferUsageBits_Storage,
 			.storage = mythril::StorageType::Device,
-			.initialData = (float*)&defaultColor,
+			.initialData = reinterpret_cast<const float*>(&defaultColor),
 			.debugName = "User Buffer"
 		});
 
@@ -364,24 +371,50 @@ namespace Andesite {
 		ImFont* boldFont = io.Fonts->AddFontFromFileTTF((kAssetsDir / "fonts/NotoSans-Bold.ttf").c_str(), 17, &fontConfig);
 
 		ImFlow::ImNodeFlow f;
-		//		f.getStyle().grid_size = 100.f;
-		//		f.getStyle().grid_subdivisions = 2.f;
-		f.addNode<ScalarNode>({});
-		f.addNode<ScalarNode>({50, 100});
+		f.getStyle().link_gradient_blend = 2.f;
+		f.getGrid().config().extra_viewport_window_flags = ImGuiWindowFlags_NoNavInputs | ImGuiWindowFlags_NoNavFocus;
 
-		f.addNode<MathNode>({250, 100});
-		auto rgbNode = f.addNode<RGBNode>({200, 300});
-		auto pbrNode = f.addNode<PBRNode>({500, 300});
-		auto output1 = f.addNode<OutputNode>({800, 350});
-		rgbNode->getOuts()[0]->createLink(pbrNode->getIns()[0].get());
-		pbrNode->getOuts()[0]->createLink(output1->getIns()[0].get());
+#ifdef __APPLE__
+		struct {
+			ImVec2 panVelocity  = {0.f, 0.f};
+			float  zoomVelocity = 0.f;
+			float  lastPinchCx  = 0.f;
+			float  lastPinchCy  = 0.f;
+		} gs;
+		// per frame velocity settings (0=instant stop, 1=never stops)
+		static constexpr float kPanSpeed = 0.35f;
+		static constexpr float kZoomSpeed = 0.20f;
+		static constexpr float kPanFriction  = 0.78f;
+		static constexpr float kZoomFriction = 0.78f;
 
-		auto findActiveOutputNode = [&f, &output1]() -> OutputNode* {
-			OutputNode* firstOutput = nullptr;
-			if (output1 && !output1->toDestroy()) {
-				firstOutput = output1.get();
+		Andesite::RegisterMacOSGestures(sdlWindow, {
+			.onMagnify = [&gs](float magnification, float cx, float cy) {
+				gs.lastPinchCx   = cx;
+				gs.lastPinchCy   = cy;
+				gs.zoomVelocity += magnification * kZoomSpeed;
+			},
+			.onPan = [&f, &gs](float dx, float dy) -> bool {
+				if (!f.getGrid().hovered()) return false;
+				const float scale    = f.getGrid().scale();
+				gs.panVelocity.x    += dx * kPanSpeed / scale;
+				gs.panVelocity.y    += dy * kPanSpeed / scale;
+				return true;
 			}
+		});
+#endif
 
+		f.addNode<ScalarNode>({50, 100});
+		f.addNode<MathNode>({250, 100});
+		{
+			auto rgbNode = f.addNode<RGBNode>({200, 300});
+			auto pbrNode = f.addNode<PBRNode>({500, 300});
+			auto output1 = f.addNode<OutputNode>({800, 350});
+			rgbNode->getOuts()[0]->createLink(pbrNode->getIns()[0].get());
+			pbrNode->getOuts()[0]->createLink(output1->getIns()[0].get());
+		}
+
+		auto findActiveOutputNode = [&f]() -> OutputNode* {
+			OutputNode* firstOutput = nullptr;
 			for (auto& node : f.getNodes() | std::views::values) {
 				if (!node || node->toDestroy()) {
 					continue;
@@ -397,7 +430,6 @@ namespace Andesite {
 					return outputNode;
 				}
 			}
-
 			return firstOutput;
 		};
 
@@ -407,11 +439,12 @@ namespace Andesite {
 		NodeRegistry::RegisterNode<MathNode>("Math Node", NodeCategory::CONVERT);
 		NodeRegistry::RegisterNode<VectorMathNode>("Vector Math Node", NodeCategory::CONVERT);
 		NodeRegistry::RegisterNode<TextureNode>("Texture Node", NodeCategory::TEXTURE);
-		NodeRegistry::RegisterNode<SeperateXYZ>("Seperate Node", NodeCategory::CONVERT);
-		NodeRegistry::RegisterNode<CombineXYZ>("Combine Node", NodeCategory::CONVERT);
+		NodeRegistry::RegisterNode<SeperateComponentsNode>("Seperate Node", NodeCategory::CONVERT);
+		NodeRegistry::RegisterNode<CombineComponentsNode>("Combine Node", NodeCategory::CONVERT);
 		NodeRegistry::RegisterNode<PBRNode>("PBR Node", NodeCategory::SHADER);
-		NodeRegistry::RegisterNode<OutputNode>("Output Node", NodeCategory::SINGLES);
+		NodeRegistry::RegisterNode<OutputNode>("Output Node", NodeCategory::UNIQUE);
 		NodeRegistry::RegisterNode<MixNode>("Mix Node", NodeCategory::CONVERT);
+		NodeRegistry::RegisterNode<TextureCoordinateNode>("Texture Coordinate", NodeCategory::INPUT);
 
 		f.rightClickPopUpContent([&f](ImFlow::BaseNode* node) {
 			if (!node) {
@@ -442,9 +475,9 @@ namespace Andesite {
 						}
 					}
 					ImGui::Separator();
-					// single category
+					// uniques category
 					const auto& nodeDefinitions =
-							NodeRegistry::GetNodesInCategory(NodeCategory::SINGLES);
+							NodeRegistry::GetNodesInCategory(NodeCategory::UNIQUE);
 					if (!nodeDefinitions.empty()) {
 						for (const auto& nodeDef : nodeDefinitions) {
 							if (ImGui::MenuItem(nodeDef.name.c_str())) {
@@ -463,16 +496,151 @@ namespace Andesite {
 			}
 		});
 
+		
+		f.droppedLinkPopUpContent([&f](ImFlow::Pin* dragged) {
+			static char searchBuf[128] = {};
+			static int selectedIdx = 0;
+			static std::string lastFilter;
+			ImGui::SetNavCursorVisible(false);
+
+			if (ImGui::IsWindowAppearing()) {
+				searchBuf[0] = '\0';
+				selectedIdx = 0;
+				lastFilter.clear();
+				ImGui::SetKeyboardFocusHere();
+			}
+
+			ImGui::SetNextItemWidth(250.f);
+			ImGui::InputText("##search", searchBuf, sizeof(searchBuf));
+
+			const ConnectionType draggedType = pinType(dragged);
+			const bool draggedIsOutput = dragged->getType() == ImFlow::PinType_Output;
+
+			auto tryConnect = [&](const std::shared_ptr<ImFlow::BaseNode>& node) {
+				if (!node) return;
+				if (draggedIsOutput) {
+					for (const auto& pin : node->getIns()) {
+						if (CanConnectPins(dragged, pin.get())) { dragged->createLink(pin.get()); break; }
+					}
+				} else {
+					for (const auto& pin : node->getOuts()) {
+						if (CanConnectPins(pin.get(), dragged)) { dragged->createLink(pin.get()); break; }
+					}
+				}
+			};
+
+			auto nodeIsCompatible = [&](const auto& def) -> bool {
+				if (draggedIsOutput) {
+					if (def.acceptedInputs.empty()) return false;
+					for (auto t : def.acceptedInputs)
+						if (CanConvertConnection(draggedType, t)) return true;
+					return false;
+				} else {
+					if (def.providedOutputs.empty()) return false;
+					for (auto t : def.providedOutputs)
+						if (CanConvertConnection(t, draggedType)) return true;
+					return false;
+				}
+			};
+
+			// build flat list as "Category > Name"
+			struct FlatEntry {
+				std::string category;
+				std::string name;
+				std::function<std::shared_ptr<ImFlow::BaseNode>(ImFlow::ImNodeFlow&)> func;
+			};
+			std::vector<FlatEntry> entries;
+
+			std::string filter(searchBuf);
+			std::ranges::transform(filter, filter.begin(), tolower);
+
+			auto collectCategory = [&](NodeCategory cat) {
+				const char* catStr = NodeCategoryToString(cat);
+				for (const auto& nodeDef : NodeRegistry::GetNodesInCategory(cat)) {
+					if (!nodeIsCompatible(nodeDef)) continue;
+					if (!filter.empty()) {
+						std::string combined = std::string(catStr) + " > " + nodeDef.name;
+						std::ranges::transform(combined, combined.begin(), ::tolower);
+						if (combined.find(filter) == std::string::npos) continue;
+					}
+					entries.push_back({catStr, nodeDef.name, nodeDef.func});
+				}
+			};
+
+			for (const NodeCategory cat : kCATEGORY_ORDER)
+				collectCategory(cat);
+			for (const auto& nodeDef : NodeRegistry::GetNodesInCategory(NodeCategory::UNIQUE)) {
+				if (!nodeIsCompatible(nodeDef)) continue;
+				if (!filter.empty()) {
+					std::string combined = std::string("Unique > ") + nodeDef.name;
+					std::ranges::transform(combined, combined.begin(), ::tolower);
+					if (combined.find(filter) == std::string::npos) continue;
+				}
+				entries.push_back({"Unique", nodeDef.name, nodeDef.func});
+			}
+
+			// reset selection when filter changes
+			if (filter != lastFilter) {
+				selectedIdx = 0;
+				lastFilter = filter;
+			}
+
+			const int count = static_cast<int>(entries.size());
+			if (selectedIdx >= count) selectedIdx = std::max(0, count - 1);
+
+			// keyboard nav for list
+			if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && selectedIdx < count - 1) {
+				++selectedIdx;
+				ImGui::SetNavCursorVisible(false);
+			}
+			if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && selectedIdx > 0) {
+				--selectedIdx;
+				ImGui::SetNavCursorVisible(false);
+			}
+
+			bool shouldClose = false;
+			if (ImGui::IsKeyPressed(ImGuiKey_Enter) && count > 0) {
+				tryConnect(entries[selectedIdx].func(f));
+				shouldClose = true;
+			}
+
+			ImGui::Separator();
+			ImGui::BeginChild("##nodelist", ImVec2(250.f, 220.f), ImGuiChildFlags_None,
+			                  ImGuiWindowFlags_NoNavInputs | ImGuiWindowFlags_NoNavFocus);
+			ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+			for (int i = 0; i < count; ++i) {
+				const bool selected = i == selectedIdx;
+				ImGui::PushID(i);
+				if (ImGui::Selectable("##row", selected)) {
+					tryConnect(entries[i].func(f));
+					shouldClose = true;
+				}
+				const ImVec2 rowMin = ImGui::GetItemRectMin();
+				ImGui::SetCursorScreenPos(ImVec2(rowMin.x + ImGui::GetStyle().ItemInnerSpacing.x, rowMin.y));
+				ImGui::TextColored(ImVec4(1.f, 1.f, 1.f, 0.65f), "%s >", entries[i].category.c_str());
+				ImGui::SameLine(0.f, 4.f);
+				ImGui::TextUnformatted(entries[i].name.c_str());
+				ImGui::PopID();
+				if (selected) ImGui::SetScrollHereY(0.5f);
+			}
+			ImGui::PopItemFlag();
+			ImGui::EndChild();
+
+			if (shouldClose) ImGui::CloseCurrentPopup();
+		});
+
 		// tracking variables
-		std::vector<PushConstantEntry> push_constant_entries;
-		size_t currentPCSize = sizeof(defaultColor);
-		size_t currentUserDataSize = 0;
+		std::vector<VariableEntry> push_constant_entries;
+		size_t currentUserDataSize = sizeof(defaultColor);
 		mythril::Shader newFragShader;
 		uint64_t recompileCounter = 0;
 		bool quit = false;
 		bool recompile = false;
 
-		// sentinel that won't match the empty graph (0), so the first frame compiles
+		bool isMarqueeSelecting = false;
+		ImVec2 marqueeStart = {0, 0};
+
+		// sentinel that won't match the empty graph (cause its 0), so the first frame compiles
 		uint64_t lastGraphSignature = ~0ull;
 		std::unordered_map<std::string, mythril::Texture> loadedTextures;
 		while (!quit) {
@@ -482,9 +650,9 @@ namespace Andesite {
 				if (e.type == SDL_EVENT_QUIT)
 					quit = true;
 				if (e.type == SDL_EVENT_KEY_DOWN) {
-					if (e.key.key == SDLK_Q)
+					if (e.key.key == SDLK_Q && SDL_GetModState() & SDL_KMOD_CTRL)
 						quit = true;
-					if (e.key.key == SDLK_R) {
+					if (e.key.key == SDLK_R && SDL_GetModState() & SDL_KMOD_CTRL) {
 						recompile = true;
 					}
 				}
@@ -568,7 +736,216 @@ namespace Andesite {
 
 			ImGui::EndMenuBar();
 
+#ifdef __APPLE__
+			// pan inertia
+			{
+				ImVec2 s = f.getScroll();
+				s.x += gs.panVelocity.x;
+				s.y += gs.panVelocity.y;
+				f.getGrid().setScroll(s);
+				gs.panVelocity.x *= kPanFriction;
+				gs.panVelocity.y *= kPanFriction;
+				if (std::abs(gs.panVelocity.x) < 0.01f) gs.panVelocity.x = 0.f;
+				if (std::abs(gs.panVelocity.y) < 0.01f) gs.panVelocity.y = 0.f;
+			}
+			// zoom inertia
+			if (std::abs(gs.zoomVelocity) > 0.001f) {
+				const float oldScale = f.getGrid().scale();
+				const float newScale = std::clamp(
+					oldScale * (1.f + gs.zoomVelocity),
+					f.getGrid().config().zoom_min,
+					f.getGrid().config().zoom_max);
+				const ImVec2 origin = f.getPos();
+				const ImVec2 scroll = f.getScroll();
+				f.getGrid().setScale(newScale);
+				f.getGrid().setScroll({
+					scroll.x + (gs.lastPinchCx - origin.x) / newScale - (gs.lastPinchCx - origin.x) / oldScale,
+					scroll.y + (gs.lastPinchCy - origin.y) / newScale - (gs.lastPinchCy - origin.y) / oldScale
+				});
+				gs.zoomVelocity *= kZoomFriction;
+				if (std::abs(gs.zoomVelocity) < 0.001f) gs.zoomVelocity = 0.f;
+			}
+#endif
+			// where imgnodeflow actually updates!!
 			f.update();
+
+			// selection box
+			{
+				const ImVec2 canvasOrigin = f.getPos();
+				const float scale = f.getGrid().scale();
+				const ImVec2 scroll = f.getScroll();
+				const ImVec2 mousePos = ImGui::GetMousePos();
+				const bool canvasHovered = f.getGrid().hovered();
+
+				auto screenToCanvas = [&](ImVec2 s) -> ImVec2 {
+					return {(s.x - canvasOrigin.x) / scale - scroll.x,
+					        (s.y - canvasOrigin.y) / scale - scroll.y};
+				};
+				bool mouseOverNode = false;
+				if (canvasHovered) {
+					for (auto& node : f.getNodes() | std::views::values) {
+						if (!node || node->toDestroy()) continue;
+						const ImVec2 np = node->getPos();
+						const ImVec2 ns = node->getSize();
+						const float sx = canvasOrigin.x + (np.x + scroll.x) * scale;
+						const float sy = canvasOrigin.y + (np.y + scroll.y) * scale;
+						if (mousePos.x >= sx && mousePos.x <= sx + ns.x * scale &&
+						    mousePos.y >= sy && mousePos.y <= sy + ns.y * scale) {
+							mouseOverNode = true;
+							break;
+						}
+					}
+				}
+				ImGuiContext* outerCtx = ImGui::GetCurrentContext();
+				ImGui::SetCurrentContext(f.getGrid().getRawContext());
+				const bool innerPopupOpen = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+				ImGui::SetCurrentContext(outerCtx);
+				if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && canvasHovered && !mouseOverNode && !f.isNodeDragged() && !innerPopupOpen) {
+					isMarqueeSelecting = true;
+					marqueeStart = mousePos;
+				}
+				if (isMarqueeSelecting) {
+					if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+						const ImVec2 rMin = {std::min(marqueeStart.x, mousePos.x), std::min(marqueeStart.y, mousePos.y)};
+						const ImVec2 rMax = {std::max(marqueeStart.x, mousePos.x), std::max(marqueeStart.y, mousePos.y)};
+						ImDrawList* dl = ImGui::GetForegroundDrawList();
+						dl->AddRectFilled(rMin, rMax, IM_COL32(100, 150, 220, 40));
+						dl->AddRect(rMin, rMax, IM_COL32(100, 150, 220, 200), 0.f, 0, 1.5f);
+					} else {
+						isMarqueeSelecting = false;
+						const ImVec2 cMin = screenToCanvas({std::min(marqueeStart.x, mousePos.x), std::min(marqueeStart.y, mousePos.y)});
+						const ImVec2 cMax = screenToCanvas({std::max(marqueeStart.x, mousePos.x), std::max(marqueeStart.y, mousePos.y)});
+						for (auto& node : f.getNodes() | std::views::values) {
+							if (!node || node->toDestroy()) continue;
+							const ImVec2 np = node->getPos();
+							const ImVec2 ns = node->getSize();
+							const bool hit = np.x < cMax.x && np.x + ns.x > cMin.x &&
+							                 np.y < cMax.y && np.y + ns.y > cMin.y;
+							node->selected(hit);
+						}
+					}
+				}
+			}
+			// hotkeys
+			{
+				const ImVec2 canvasMin = f.getPos();
+				const ImVec2 canvasSize = f.getGrid().size();
+				const ImVec2 canvasMax = {canvasMin.x + canvasSize.x, canvasMin.y + canvasSize.y};
+				const ImVec2 mousePos = ImGui::GetMousePos();
+				const bool isMouseOverCanvas = mousePos.x >= canvasMin.x && mousePos.x <= canvasMax.x &&
+				                               mousePos.y >= canvasMin.y && mousePos.y <= canvasMax.y;
+				static ImVec2 initialMousePos = { 0.0f, 0.0f };
+				ImGuiContext* outerCtxHotkey = ImGui::GetCurrentContext();
+				ImGui::SetCurrentContext(f.getGrid().getRawContext());
+				const bool innerPopupOpenHotkey = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+				ImGui::SetCurrentContext(outerCtxHotkey);
+				const bool anyPopupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) || innerPopupOpenHotkey;
+				if (isMouseOverCanvas && !anyPopupOpen &&
+				    ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_A, ImGuiInputFlags_RouteGlobal)) {
+					ImGui::OpenPopup("NodeSearchMenu");
+					initialMousePos = mousePos;
+				}
+				ImGui::SetNextWindowPos(mousePos, ImGuiCond_Appearing);
+				if (ImGui::BeginPopup("NodeSearchMenu", ImGuiWindowFlags_NoNavInputs | ImGuiWindowFlags_NoNavFocus)) {
+					static char search_buffer[128] = "";
+					static int selected_idx = 0;
+					static std::string last_filter;
+					ImGui::SetNavCursorVisible(false);
+
+					// set initial focus on new popup
+					if (ImGui::IsWindowAppearing()) {
+						ImGui::SetKeyboardFocusHere();
+						search_buffer[0] = '\0';
+						selected_idx = 0;
+						last_filter.clear();
+					}
+					ImGui::TextDisabled("Search Nodes...");
+					ImGui::InputText("###search", search_buffer, IM_ARRAYSIZE(search_buffer));
+					ImGui::Separator();
+
+					auto spawnAndPlaceNode = [&](const std::function<std::shared_ptr<ImFlow::BaseNode>(ImFlow::ImNodeFlow&)>& spawnFunc) {
+						if (auto newNode = spawnFunc(f)) {
+							const ImVec2 canvas_origin = f.getPos();
+							const float scale = f.getGrid().scale();
+							const ImVec2 scroll = f.getScroll();
+							const ImVec2 canvas_spawn_pos = {
+								(initialMousePos.x - canvas_origin.x) / scale - scroll.x,
+								(initialMousePos.y - canvas_origin.y) / scale - scroll.y
+							};
+							newNode->setPos(canvas_spawn_pos);
+						}
+					};
+
+					std::string filter(search_buffer);
+					std::ranges::transform(filter, filter.begin(), [](unsigned char c) {
+						return static_cast<char>(std::tolower(c));
+					});
+
+					const auto& allRegisteredNodes = NodeRegistry::GetAllNodes();
+					std::vector<int> filteredNodeIndices;
+					filteredNodeIndices.reserve(allRegisteredNodes.size());
+					for (int i = 0; i < static_cast<int>(allRegisteredNodes.size()); ++i) {
+						const auto& nodeDef = allRegisteredNodes[i];
+						std::string searchable = nodeDef.name;
+						if (nodeDef.category == NodeCategory::UNIQUE)
+							searchable += " Uniques";
+						else
+							searchable += std::string(" ") + NodeCategoryToString(nodeDef.category);
+						std::ranges::transform(searchable, searchable.begin(), [](unsigned char c) {
+							return static_cast<char>(std::tolower(c));
+						});
+						if (filter.empty() || searchable.find(filter) != std::string::npos)
+							filteredNodeIndices.push_back(i);
+					}
+
+					if (filter != last_filter) {
+						selected_idx = 0;
+						last_filter = filter;
+					}
+
+					const int count = static_cast<int>(filteredNodeIndices.size());
+					if (selected_idx >= count) selected_idx = std::max(0, count - 1);
+					// keyboard nav for list
+					if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && selected_idx < count - 1) {
+						++selected_idx;
+						ImGui::SetNavCursorVisible(false);
+					}
+					if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && selected_idx > 0) {
+						--selected_idx;
+						ImGui::SetNavCursorVisible(false);
+					}
+
+
+					bool should_close = false;
+					if (ImGui::IsKeyPressed(ImGuiKey_Enter) && count > 0) {
+						spawnAndPlaceNode(allRegisteredNodes[filteredNodeIndices[selected_idx]].func);
+						should_close = true;
+					}
+					ImGui::BeginChild("###nodelist", ImVec2(250.f, 250.f), ImGuiChildFlags_None,
+					                  ImGuiWindowFlags_NoNavInputs | ImGuiWindowFlags_NoNavFocus);
+					ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+					for (int i = 0; i < count; i++) {
+						const bool selected = i == selected_idx;
+						const auto& nodeDef = allRegisteredNodes[filteredNodeIndices[i]];
+						ImGui::PushID(i);
+						if (ImGui::Selectable("##row", selected)) {
+							spawnAndPlaceNode(nodeDef.func);
+							should_close = true;
+						}
+						const ImVec2 row_min = ImGui::GetItemRectMin();
+						ImGui::SetCursorScreenPos(ImVec2(row_min.x + ImGui::GetStyle().ItemInnerSpacing.x, row_min.y));
+						//ImGui::TextColored(ImVec4(1.f, 1.f, 1.f, 0.65f), "")
+						ImGui::TextUnformatted(nodeDef.name.c_str());
+						ImGui::PopID();
+						if (selected) ImGui::SetScrollHereY(0.5f);
+					}
+					ImGui::PopItemFlag();
+					ImGui::EndChild();
+					if (should_close) ImGui::CloseCurrentPopup();
+					ImGui::EndPopup();
+				}
+			}
+
 			ImGui::End();
 
 			ImGui::Begin("##Preview", nullptr, panel_flags);
@@ -639,28 +1016,26 @@ namespace Andesite {
 				// only when nodes connected to output change do we recompile
 				if (recompile) {
 					const auto [fileContent, pushLayout, pcSize] = ShaderCompiler::Compile(activeOutputNode);
-					if (pcSize > currentPCSize) {
-						ctx->resizeBuffer(userBuffer.handle(), pcSize);
-						currentPCSize = pcSize;
-					}
-
-					push_constant_entries = pushLayout;
-					currentUserDataSize = pcSize;
-
 					//std::cerr << "[Recompile] output=" << activeOutputNode->getUID() << " sig=" << graphSignature << " entries=" << pushLayout.size() << " pcSize=" << pcSize << "\n";
-					std::cerr << fileContent << std::endl;
+					//std::cerr << fileContent << std::endl;
 
 					newFragShader = ctx->createShader({
 						.source = fileContent,
 						.debugName = ("graph_shader_" + std::to_string(recompileCounter)).c_str()
 					});
+					// keep the last good shader and its matching layout bound if compile fails
 					if (!newFragShader.valid()) {
 						std::cerr << "[ERROR] Shader creation failed!\n";
+					} else {
+						if (pcSize > currentUserDataSize) {
+							ctx->resizeBuffer(userBuffer.handle(), pcSize);
+							currentUserDataSize = pcSize;
+						}
+						push_constant_entries = pushLayout;
+						ctx->switchShader(mainPipeline, newFragShader, mythril::ShaderStages::Fragment);
+						++recompileCounter;
 					}
-					ctx->switchShader(mainPipeline, newFragShader, mythril::ShaderStages::Fragment);
 					recompile = false;
-					// simple, optional tracking
-					++recompileCounter;
 				}
 			}
 
@@ -703,44 +1078,17 @@ namespace Andesite {
 
 			// build the user_data to send to shader
 			std::vector<uint8_t> user_data(currentUserDataSize, 0);
-			auto copyEntry = [&user_data](const PushConstantEntry& entry, const void* srcPtr, size_t srcSize) {
-				if (srcSize != entry.size) {
-					std::cerr << "Push constant size mismatch for " << entry.varName
-						<< "of type " << PushConstantTypeToShaderString(entry.type)
-						<< ": value=" << srcSize << " layout=" << entry.size << "\n";
-					assert(false && "Push constant value size differs from layout size");
-				}
-				if (entry.offset + srcSize > user_data.size()) {
+			for (const auto& entry : push_constant_entries) {
+				if (!entry.src) continue;
+				if (entry.offset + entry.size > user_data.size()) {
 					std::cerr << "Push constant write out of bounds for " << entry.varName
-					          << ": offset=" << entry.offset << " size=" << srcSize
+					          << ": offset=" << entry.offset << " size=" << entry.size
 					          << " buffer=" << user_data.size() << "\n";
 					assert(false && "Push constant value write exceeds user buffer size");
 				}
-				std::memcpy(user_data.data() + entry.offset, srcPtr, srcSize);
-			};
-			auto copyEntryWrapper = [&copyEntry](const PushConstantEntry& entry, const auto& value) {
-				copyEntry(entry, &value, sizeof(value));
-			};
-
-			// todo: all input nodes MUST be here
-			for (const auto& entry : push_constant_entries) {
-				if (!entry.pNode) continue;
-				if (auto* value_node = dynamic_cast<ScalarNode*>(entry.pNode)) {
-					const void* v = value_node->getRawDataPtr();
-					const size_t s = value_node->getDataSize();
-					copyEntry(entry, v, s);
-				} else if (auto* rgb_node = dynamic_cast<RGBNode*>(entry.pNode)) {
-					const glm::vec3 c = rgb_node->getValue();
-					copyEntryWrapper(entry, c);
-				} else if (auto* texture_node = dynamic_cast<TextureNode*>(entry.pNode)) {
-					const uint64_t index = texture_node->getValue();
-					copyEntryWrapper(entry, index);
-				} else {
-					std::cerr << "Unhandled input node during user buffer packing!\n";
-				}
+				std::memcpy(user_data.data() + entry.offset, entry.src, entry.size);
 			}
 
-			mythril::CommandBuffer& cmd = ctx->acquireCommand(mythril::CommandBuffer::Type::Graphics);
 			const auto currentTime = std::chrono::high_resolution_clock::now();
 			float time = std::chrono::duration<float>(currentTime - startTime).count();
 			const GPU::Camera camera_data = {
@@ -753,6 +1101,7 @@ namespace Andesite {
 				.time = time,
 				.resolution = {1920, 1080},
 			};
+			mythril::CommandBuffer& cmd = ctx->acquireCommand(mythril::CommandBuffer::Type::Graphics);
 			cmd.cmdUpdateBuffer(perFrameBuffer, frame_data);
 			// just upload every frame doesnt hurt
 			if (!user_data.empty()) {
@@ -761,6 +1110,10 @@ namespace Andesite {
 			graph.execute(cmd);
 			ctx->submitCommand(cmd);
 		}
+
+#ifdef __APPLE__
+		Andesite::UnregisterMacOSGestures();
+#endif
 	}
 } // namespace Andesite
 
